@@ -151,8 +151,8 @@
 
 - name: "Setup backup cron job."
   cron:
-    name: backup reportr
+    name: "backup {{ dbname }}"
     user: ubuntu
     state: present
     special_time: hourly
-    job: "pg_dump -U postgres -h localhost -Fc reportr > ~/psql_backups/reportr_backup.sql"
+    job: "pg_dump -U postgres -h localhost -Fc {{ dbname }} > ~/psql_backups/{{ dbname }}_backup.sql"
