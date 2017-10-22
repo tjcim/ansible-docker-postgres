@@ -1,0 +1,16 @@
+galaxy_info:
+  author: Trevor Christiansen
+  description: Provisions and runs postgres in a docker container
+  license: BSD
+  min_ansible_version: 2.4
+  platforms:
+    - name: Ubuntu
+      versions:
+        - xenial
+
+  galaxy_tags:
+    - postgres
+
+dependencies:
+  - tjcim.ansible-vagrant-box
+  - tjcim.ansible-docker

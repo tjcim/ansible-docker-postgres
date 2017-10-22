@@ -1,0 +1,158 @@
+---
+- name: Create psql_data folder
+  file:
+    path: ~/psql_data
+    state: directory
+    mode: 0755
+
+- name: Create psql_backup folder
+  file:
+    path: ~/psql_backups
+    state: directory
+    mode: 0755
+
+- name: Check that .pgpass exists
+  stat:
+    path: ~/.pgpass
+  register: pgpass
+
+- name: Create pgpass file if it does not exist
+  file:
+    path: ~/.pgpass
+    state: touch
+    mode: 0600
+  when: pgpass.stat.exists == False
+
+- name: Register pgpass contents
+  command: cat ~/.pgpass
+  register: pgpass_contents
+
+- name: Create postgres password if postgres not found in .pgpass
+  command: pwgen -1 32
+  register: pwgen_postgres
+  when: pgpass_contents.stdout.find('postgres') == -1
+
+- name: Set regex pattern for postgres password
+  set_fact: postgres_regex="postgres:postgres:(.*)"
+
+- name: Get postgres password if postgres was found in .pgpass
+  set_fact:
+    postgres_password: "{{ (pgpass_contents.stdout | regex_findall( postgres_regex ))[0] }}"
+  when: pgpass_contents.stdout.find('postgres') != -1
+
+- name: Save pwgen output if postgres not found in .pgpass
+  set_fact:
+    postgres_password: "{{ pwgen_postgres.stdout }}"
+  when: pgpass_contents.stdout.find('postgres') == -1
+
+- name: Save to pgpass if postgres not found in .pgpass
+  lineinfile:
+    path: ~/.pgpass
+    state: present
+    line: "localhost:5432:postgres:postgres:{{ postgres_password }}"
+  when: pgpass_contents.stdout.find('postgres') == -1
+
+- name: Save dbname to pgpass if it is not already there.
+  lineinfile:
+    path: ~/.pgpass
+    state: present
+    line: "localhost:5432:{{ dbname }}:postgres:{{ postgres_password }}"
+  when: pgpass_contents.stdout.find(dbname) == -1
+
+- name: Write dbuser to profile
+  lineinfile:
+    path: ~/.profile
+    state: present
+    line: "export DB_USER={{ dbuser }}"
+
+- name: Write dbname to profile
+  lineinfile:
+    path: ~/.profile
+    state: present
+    line: "export DB_NAME={{ dbname }}"
+
+- name: Get contents of .profile
+  command: cat ~/.profile
+  register: profile_contents
+
+- name: Run pwgen for dbpassword if not already in profile
+  command: pwgen -1 32
+  register: pwgen_dbuser
+  when: profile_contents.stdout.find('DB_PASSWORD') == -1
+
+- name: Create dbpassword if not already in profile
+  set_fact:
+    dbpassword: "{{ pwgen_dbuser.stdout }}"
+  when: profile_contents.stdout.find('DB_PASSWORD') == -1
+
+- name: Set regex pattern for dbuser password from .profile
+  set_fact: dbuser_regex="export DB_PASSWORD=(.*)"
+
+- name: Get dbuser password if dbuser was found in profile_contents
+  set_fact:
+    dbpassword: "{{ (profile_contents.stdout | regex_findall( dbuser_regex ))[0] }}"
+  when: profile_contents.stdout.find('DB_PASSWORD') != -1
+
+- name: Write dbpassword to profile if not already there
+  lineinfile:
+    path: ~/.profile
+    state: present
+    line: "export DB_PASSWORD={{ dbpassword }}"
+  when: profile_contents.stdout.find('DB_PASSWORD') == -1
+
+- name: Start postgres container
+  become: yes
+  become_method: sudo
+  docker_container:
+    name: postgres
+    image: postgres:alpine
+    state: started
+    restart_policy: always
+    env:
+      POSTGRES_PASSWORD: "{{ postgres_password }}"
+      PGDATA: /home/ubuntu/pgsql_data
+    published_ports:
+      - "5432:5432"
+
+- name: Make sure psycopg2 is installed
+  become: yes
+  become_method: sudo
+  apt:
+    name: "{{ item }}"
+    state: latest
+  with_items:
+    - 'python3-psycopg2'
+    - 'python-psycopg2'
+
+- name: Create db
+  postgresql_db:
+    name: "{{ dbname }}"
+    login_host: "localhost"
+    login_user: "postgres"
+
+- name: "Create {{ dbuser }} account"
+  postgresql_user:
+    encrypted: yes
+    login_host: "localhost"
+    login_user: "postgres"
+    db: "{{ dbname }}"
+    name: "{{ dbuser }}"
+    password: "{{ dbpassword }}"
+
+- name: "Grant all privileges on database {{ dbname }} to {{ dbuser }}"
+  postgresql_privs:
+    host: "localhost"
+    login: "postgres"
+    db: "postgres"
+    privs: ALL
+    type: database
+    obj: "{{ dbname }}"
+    role: "{{ dbuser }}"
+
+- name: "Setup backup cron job."
+  cron:
+    name: backup reportr
+    user: ubuntu
+    state: present
+    special_time: hourly
+    job: "pg_dump -U postgres -h localhost -Fc reportr > ~/psql_backups/reportr_backup.sql"
